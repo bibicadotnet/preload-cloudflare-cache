@@ -22,7 +22,7 @@ for sitemap in $sitemaps; do
                 let "count=count+1"
 
                 echo "HITTING $sitemap"
-                result=`curl -sI $sitemap | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -En 's/^_img_bibica_net_: (.*)/\1/p'`
+                result=`curl -sI $sitemap | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -En 's/^_img.bibica.net_: (.*)/\1/p'`
 
                 # If URL is cached, move onto the next sitemap.
                 if [ "hit" == "$result" ]; then
