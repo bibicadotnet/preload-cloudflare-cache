@@ -1,0 +1,126 @@
+name: Crawl Sitemap URLs
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Chạy hàng ngày lúc 2h sáng
+  workflow_dispatch:     # Cho phép chạy thủ công
+
+jobs:
+  crawl-sitemap:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Install dependencies
+      run: |
+        npm init -y
+        npm install puppeteer xml2js
+        
+    - name: Create crawler script
+      run: |
+        cat > crawler.js << 'EOF'
+        const puppeteer = require('puppeteer');
+        const { parseString } = require('xml2js');
+        const fs = require('fs');
+
+        async function crawlSitemap() {
+          console.log('Starting sitemap crawler...');
+          
+          // Launch browser
+          const browser = await puppeteer.launch({
+            headless: true,
+            args: [
+              '--no-sandbox',
+              '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage'
+            ]
+          });
+          
+          const page = await browser.newPage();
+          
+          try {
+            // Fetch sitemap
+            console.log('Fetching sitemap...');
+            await page.goto('https://bibica.net/sitemap.xml');
+            const sitemapContent = await page.content();
+            
+            // Parse XML
+            parseString(sitemapContent, async (err, result) => {
+              if (err) {
+                console.error('Error parsing sitemap:', err);
+                return;
+              }
+              
+              const urls = result.urlset?.url || [];
+              console.log(`Found ${urls.length} URLs in sitemap`);
+              
+              const results = [];
+              
+              // Visit each URL
+              for (let i = 0; i < urls.length; i++) {
+                const urlObj = urls[i];
+                const url = urlObj.loc[0];
+                
+                try {
+                  console.log(`Visiting ${i + 1}/${urls.length}: ${url}`);
+                  
+                  const response = await page.goto(url, { 
+                    waitUntil: 'networkidle0',
+                    timeout: 30000 
+                  });
+                  
+                  const title = await page.title();
+                  const statusCode = response.status();
+                  
+                  results.push({
+                    url: url,
+                    title: title,
+                    status: statusCode,
+                    timestamp: new Date().toISOString()
+                  });
+                  
+                  console.log(`✓ ${statusCode} - ${title}`);
+                  
+                  // Delay để tránh spam
+                  await page.waitForTimeout(1000);
+                  
+                } catch (error) {
+                  console.error(`✗ Error visiting ${url}:`, error.message);
+                  results.push({
+                    url: url,
+                    error: error.message,
+                    timestamp: new Date().toISOString()
+                  });
+                }
+              }
+              
+              // Save results
+              fs.writeFileSync('crawl-results.json', JSON.stringify(results, null, 2));
+              console.log(`Crawling completed. Results saved to crawl-results.json`);
+            });
+            
+          } catch (error) {
+            console.error('Error:', error);
+          } finally {
+            await browser.close();
+          }
+        }
+
+        crawlSitemap();
+        EOF
+        
+    - name: Run crawler
+      run: node crawler.js
+      
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      with:
+        name: crawl-results
+        path: crawl-results.json
