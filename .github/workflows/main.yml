@@ -1,126 +1,84 @@
-name: Crawl Sitemap URLs
+name: Simple Sitemap Crawler
 
 on:
-  schedule:
-    - cron: '0 2 * * *'  # Chạy hàng ngày lúc 2h sáng
-  workflow_dispatch:     # Cho phép chạy thủ công
+  workflow_dispatch:
 
 jobs:
-  crawl-sitemap:
+  crawl:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - uses: actions/checkout@v4
+    
+    - uses: actions/setup-node@v4
       with:
         node-version: '18'
         
-    - name: Install dependencies
-      run: |
-        npm init -y
-        npm install puppeteer xml2js
+    - name: Install
+      run: npm install puppeteer
         
-    - name: Create crawler script
+    - name: Create crawler
       run: |
         cat > crawler.js << 'EOF'
         const puppeteer = require('puppeteer');
-        const { parseString } = require('xml2js');
-        const fs = require('fs');
 
-        async function crawlSitemap() {
-          console.log('Starting sitemap crawler...');
-          
-          // Launch browser
+        async function crawl() {
           const browser = await puppeteer.launch({
             headless: true,
-            args: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage'
-            ]
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
           });
           
           const page = await browser.newPage();
           
           try {
-            // Fetch sitemap
-            console.log('Fetching sitemap...');
+            // Get sitemap
             await page.goto('https://bibica.net/sitemap.xml');
-            const sitemapContent = await page.content();
+            const content = await page.content();
             
-            // Parse XML
-            parseString(sitemapContent, async (err, result) => {
-              if (err) {
-                console.error('Error parsing sitemap:', err);
-                return;
-              }
+            // Extract URLs with regex (simple & works)
+            const urls = content.match(/<loc>(.*?)<\/loc>/g)
+              ?.map(match => match.replace(/<\/?loc>/g, ''))
+              || [];
+            
+            console.log(`Found ${urls.length} URLs`);
+            
+            const results = [];
+            
+            // Visit each URL
+            for (let i = 0; i < Math.min(urls.length, 20); i++) { // Limit to 20 for testing
+              const url = urls[i];
+              console.log(`${i+1}/${urls.length}: ${url}`);
               
-              const urls = result.urlset?.url || [];
-              console.log(`Found ${urls.length} URLs in sitemap`);
-              
-              const results = [];
-              
-              // Visit each URL
-              for (let i = 0; i < urls.length; i++) {
-                const urlObj = urls[i];
-                const url = urlObj.loc[0];
+              try {
+                const response = await page.goto(url, { timeout: 15000 });
+                const title = await page.title();
                 
-                try {
-                  console.log(`Visiting ${i + 1}/${urls.length}: ${url}`);
-                  
-                  const response = await page.goto(url, { 
-                    waitUntil: 'networkidle0',
-                    timeout: 30000 
-                  });
-                  
-                  const title = await page.title();
-                  const statusCode = response.status();
-                  
-                  results.push({
-                    url: url,
-                    title: title,
-                    status: statusCode,
-                    timestamp: new Date().toISOString()
-                  });
-                  
-                  console.log(`✓ ${statusCode} - ${title}`);
-                  
-                  // Delay để tránh spam
-                  await page.waitForTimeout(1000);
-                  
-                } catch (error) {
-                  console.error(`✗ Error visiting ${url}:`, error.message);
-                  results.push({
-                    url: url,
-                    error: error.message,
-                    timestamp: new Date().toISOString()
-                  });
-                }
+                results.push({
+                  url: url,
+                  status: response.status(),
+                  title: title
+                });
+                
+                console.log(`✓ ${response.status()} - ${title}`);
+                
+              } catch (error) {
+                console.log(`✗ Error: ${error.message}`);
+                results.push({ url: url, error: error.message });
               }
               
-              // Save results
-              fs.writeFileSync('crawl-results.json', JSON.stringify(results, null, 2));
-              console.log(`Crawling completed. Results saved to crawl-results.json`);
-            });
+              await page.waitForTimeout(500); // Wait 0.5s between requests
+            }
             
-          } catch (error) {
-            console.error('Error:', error);
+            console.log('\n=== RESULTS ===');
+            console.log(JSON.stringify(results, null, 2));
+            
           } finally {
             await browser.close();
           }
         }
 
-        crawlSitemap();
+        crawl();
         EOF
         
     - name: Run crawler
       run: node crawler.js
-      
-    - name: Upload results
-      uses: actions/upload-artifact@v4
-      with:
-        name: crawl-results
-        path: crawl-results.json
